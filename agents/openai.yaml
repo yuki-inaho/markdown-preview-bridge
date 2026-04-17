@@ -1,0 +1,4 @@
+interface:
+  display_name: "Markdown Preview Bridge"
+  short_description: "Preview local Markdown with Playwright."
+  default_prompt: "Open a local Markdown file in a ByteMD/Vite preview, inspect rendered DOM via Playwright, and report issues with source context."

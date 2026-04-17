@@ -1,0 +1,25 @@
+{
+  "name": "markdown-preview-bridge-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "serve": "node server.mjs",
+    "build": "vite build",
+    "smoke": "node --check server.mjs"
+  },
+  "engines": {
+    "node": ">=20 <23"
+  },
+  "dependencies": {
+    "@bytemd/plugin-gfm": "^1.22.0",
+    "@bytemd/plugin-math": "^1.22.0",
+    "@bytemd/plugin-mermaid": "^1.22.0",
+    "@bytemd/react": "^1.22.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "bytemd": "^1.22.0",
+    "vite": "^5.4.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {}
+}
