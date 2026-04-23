@@ -26,7 +26,8 @@ copy mode.
 
 ## Requirements
 
-- Python 3.10 or newer is recommended.
+- `uv` is the recommended way to run the bundled Python tools reproducibly.
+- Python 3.10 or newer is required; `.python-version` pins the local dev/test baseline used by `uv`.
 - Node.js 20 is the validated baseline; see `.node-version`.
 - npm is required for the Vite app dependencies.
 - `playwright-cli` is required for browser operation.
@@ -34,10 +35,19 @@ copy mode.
 - `xdotool` is optional and only used on Linux/X11 to normalize visible window
   geometry and focus.
 
+Bootstrap the Python tooling environment:
+
+```bash
+uv sync --frozen
+```
+
+If `just` is installed, the root `justfile` exposes the common commands.
+
 Run the environment check:
 
 ```bash
-python3 scripts/doctor.py
+uv run --frozen scripts/doctor.py
+# or: just doctor
 ```
 
 ## Quick Start
@@ -45,24 +55,28 @@ python3 scripts/doctor.py
 Start a read-only preview server:
 
 ```bash
-python3 scripts/preview.py \
+uv run --frozen scripts/preview.py \
   --file /absolute/path/to/document.md \
   --root /absolute/path/to/project-or-doc-root \
   --port 8777
+
+# or: just preview /absolute/path/to/document.md /absolute/path/to/project-or-doc-root
 ```
 
 Open it in a visible browser:
 
 ```bash
-python3 scripts/open_visible.py \
+uv run --frozen scripts/open_visible.py \
   --url http://127.0.0.1:8777/ \
   --session md-preview-visible
+
+# or: just open-visible
 ```
 
 Allow browser-side saving only when needed:
 
 ```bash
-python3 scripts/preview.py \
+uv run --frozen scripts/preview.py \
   --file /absolute/path/to/document.md \
   --root /absolute/path/to/project-or-doc-root \
   --port 8777 \
@@ -81,7 +95,8 @@ divider to adjust it, or double-click the divider to reset the review layout.
 Run the smoke test:
 
 ```bash
-python3 scripts/quick_validate.py
+uv run --frozen scripts/quick_validate.py
+# or: just quick-validate
 ```
 
 Use `--no-install` only when the Vite dependencies are already present in the
@@ -94,6 +109,35 @@ The smoke test verifies:
 - root-outside paths are rejected;
 - default/read-only save is rejected;
 - watch headers are returned as expected.
+
+Run the CLI-only browser regression test:
+
+```bash
+uv run --frozen scripts/bridge_regression.py
+# or: just bridge-regression
+```
+
+This headless regression test starts the preview server, opens it through
+`playwright-cli`, and verifies the browser bridge contract plus the split-layout
+guardrail that keeps the marker strip from overlapping the main panes.
+
+When comparing a merge target against another checkout or installed skill,
+override the launcher path and enable the line-navigation contract:
+
+```bash
+uv run --frozen scripts/bridge_regression.py \
+  --preview-script /absolute/path/to/other/markdown-preview-bridge/scripts/preview.py \
+  --require-line-navigation
+
+# or:
+just bridge-regression \
+  --preview-script /absolute/path/to/other/markdown-preview-bridge/scripts/preview.py \
+  --require-line-navigation
+```
+
+When comparing two different checkouts or an installed skill against this
+repository, run them sequentially or give each run its own `--app-dir` so their
+synced Vite caches do not overwrite each other.
 
 ## Safety Model
 

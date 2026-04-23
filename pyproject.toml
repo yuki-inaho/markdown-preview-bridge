@@ -1,0 +1,11 @@
+[project]
+name = "markdown-preview-bridge"
+version = "0.1.0"
+description = "Local Markdown preview bridge with CLI validation helpers."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+dependencies = []
+
+[tool.uv]
+package = false

@@ -38,7 +38,8 @@ local .md -> ByteMD/Vite browser preview -> Playwright DOM inspection -> Codex e
 
 ## Prerequisites
 
-- Python 3 for the bundled launcher scripts.
+- `uv` for reproducible execution of the bundled Python launcher and validation scripts.
+- Python 3.10 or newer for the bundled launcher scripts. `.python-version` pins the local dev/test baseline.
 - Node.js and npm for the Vite preview app. The launcher installs app dependencies into a cache directory when needed.
 - `playwright-cli` and a local Chrome/Chromium for browser operation.
 - `xdotool` only when headed browser window geometry/focus must be normalized on Linux/X11. Page and DOM inspection should still use Playwright.
@@ -56,18 +57,19 @@ local .md -> ByteMD/Vite browser preview -> Playwright DOM inspection -> Codex e
 Start a preview server for a local Markdown file:
 
 ```bash
-python3 scripts/preview.py \
+uv sync --frozen
+uv run --frozen scripts/preview.py \
   --file /absolute/path/to/document.md \
   --root /absolute/path/to/repo-or-doc-root \
   --port 8777
 ```
 
-Run commands from the skill root, or resolve `scripts/preview.py` relative to this `SKILL.md`.
+Run commands from the skill root, or resolve `scripts/preview.py` relative to this `SKILL.md`. If `just` is installed, the root `justfile` exposes the common `uv run` wrappers.
 
 Markdown hot reload is enabled by default. Disable it only when file watching is undesirable:
 
 ```bash
-python3 scripts/preview.py \
+uv run --frozen scripts/preview.py \
   --file /absolute/path/to/document.md \
   --port 8777 \
   --no-watch
@@ -76,7 +78,7 @@ python3 scripts/preview.py \
 Enable browser-side saving only when needed:
 
 ```bash
-python3 scripts/preview.py \
+uv run --frozen scripts/preview.py \
   --file /absolute/path/to/document.md \
   --root /absolute/path/to/repo-or-doc-root \
   --port 8777 \
@@ -98,7 +100,7 @@ playwright-cli -s=md-preview-visible open http://127.0.0.1:8777/ --browser chrom
 For a visible browser with normalized geometry, prefer the bundled wrapper:
 
 ```bash
-python3 scripts/open_visible.py \
+uv run --frozen scripts/open_visible.py \
   --url http://127.0.0.1:8777/ \
   --session md-preview-visible \
   --width 1600 \
@@ -112,7 +114,7 @@ MD_PREVIEW_WINDOW_X=80 \
 MD_PREVIEW_WINDOW_Y=40 \
 MD_PREVIEW_WINDOW_WIDTH=1600 \
 MD_PREVIEW_WINDOW_HEIGHT=1000 \
-python3 scripts/open_visible.py
+uv run --frozen scripts/open_visible.py
 ```
 
 If using raw `playwright-cli`, normalize after launch:
@@ -162,7 +164,7 @@ playwright-cli -s=md-preview-visible eval '() => window.__mdPreviewBridge?.diagn
 If the existing server root does not contain every target document, start a new server on another free port with the correct `--root` and open all tabs against that port:
 
 ```bash
-python3 scripts/preview.py \
+uv run --frozen scripts/preview.py \
   --file /absolute/path/to/first.md \
   --root /absolute/path/to/repo-or-doc-root \
   --port 8780
@@ -311,9 +313,11 @@ The page exposes:
 
 - `diagnostics()`: source path, status, hot reload state, counts for headings/tables/code/math/mermaid, render errors, and text length.
 - `diagnostics().readOnly`, `diagnostics().rootPath`, and `diagnostics().allowExt`: current file-access guardrails.
+- `selectionDetails()`: raw selection text, math-aware plain text, and whether the current selection includes rendered math.
 - `headings()`: rendered headings with approximate source lines.
 - `findText(query)`: rendered block matches and likely source lines.
 - `getSelectionContext()`: current browser selection and nearest rendered block metadata.
+- `gotoLine(line, options)`: jump the source editor to a logical Markdown line.
 - `sourceForLine(line, radius)`: Markdown source context around a line.
 - `getMarkdown()`: current Markdown source text.
 - `reloadMarkdown()`: reload the local file from disk.

@@ -4,6 +4,7 @@ import { Editor, Viewer } from '@bytemd/react';
 import gfm from '@bytemd/plugin-gfm';
 import math from '@bytemd/plugin-math';
 import mermaid from '@bytemd/plugin-mermaid';
+import 'katex/contrib/copy-tex';
 import 'bytemd/dist/index.css';
 import 'katex/dist/katex.css';
 import './style.css';
@@ -17,6 +18,105 @@ const DEFAULT_PANE_RATIO = 0.4;
 const PANE_KEYBOARD_STEP = 0.04;
 const MIN_PANE_WIDTH = 360;
 const SPLIT_HANDLE_WIDTH = 12;
+let katexModulePromise = null;
+let mermaidModulePromise = null;
+let mermaidInitialized = false;
+
+async function ensureKatex() {
+  if (!katexModulePromise) {
+    katexModulePromise = import('katex').then((mod) => mod.default || mod);
+  }
+  return katexModulePromise;
+}
+
+async function ensureMermaid() {
+  if (!mermaidModulePromise) {
+    mermaidModulePromise = import('mermaid').then((mod) => mod.default || mod);
+  }
+  const mermaidLib = await mermaidModulePromise;
+  if (!mermaidInitialized) {
+    mermaidLib.initialize({
+      startOnLoad: false,
+      securityLevel: 'loose',
+    });
+    mermaidInitialized = true;
+  }
+  return mermaidLib;
+}
+
+async function renderMathInRenderedDom() {
+  const rendered = document.querySelector('#rendered');
+  if (!rendered) return;
+  const elements = Array.from(rendered.querySelectorAll('.math.math-inline, .math.math-display'));
+  if (elements.length === 0) return;
+  const katex = await ensureKatex();
+  elements.forEach((element) => {
+    if (element.querySelector('.katex')) return;
+    const expression = element.textContent || '';
+    katex.render(expression, element, {
+      throwOnError: false,
+      displayMode: element.classList.contains('math-display'),
+    });
+    element.dataset.katexRendered = '1';
+  });
+}
+
+async function renderMermaidInRenderedDom(reportError = () => {}) {
+  const rendered = document.querySelector('#rendered');
+  if (!rendered) return;
+  const elements = Array.from(rendered.querySelectorAll('pre > code.language-mermaid'));
+  if (elements.length === 0) return;
+  const mermaidLib = await ensureMermaid();
+  await Promise.all(elements.map(async (element, index) => {
+    const pre = element.parentElement;
+    if (!pre) return;
+    const source = element.textContent || '';
+    const fallbackPre = pre.cloneNode(true);
+    const container = document.createElement('div');
+    container.className = 'bytemd-mermaid mermaid';
+    container.style.lineHeight = 'initial';
+    pre.replaceWith(container);
+    try {
+      const renderId = `md-preview-mermaid-${Date.now()}-${index}`;
+      const renderedSvg = await mermaidLib.render(renderId, source);
+      container.innerHTML = renderedSvg.svg;
+      renderedSvg.bindFunctions?.(container);
+      container.dataset.mermaidRendered = '1';
+    } catch (error) {
+      container.replaceWith(fallbackPre);
+      reportError(error);
+    }
+  }));
+}
+
+function normalizeKatexFragmentToTex(fragment) {
+  const katexHtml = fragment.querySelectorAll('.katex-mathml + .katex-html');
+  katexHtml.forEach((element) => element.remove?.());
+
+  const katexMathml = fragment.querySelectorAll('.katex-mathml');
+  katexMathml.forEach((element) => {
+    const texSource = element.querySelector('annotation');
+    if (!texSource) return;
+    element.replaceWith?.(texSource);
+    texSource.innerHTML = `$${texSource.innerHTML}$`;
+  });
+
+  const displays = fragment.querySelectorAll('.katex-display annotation');
+  displays.forEach((element) => {
+    element.innerHTML = `$$${element.innerHTML.slice(1, -1)}$$`;
+  });
+
+  return fragment;
+}
+
+function selectionPlainText(selection) {
+  if (!selection || selection.rangeCount === 0) return '';
+  const text = selection.toString();
+  if (!selectionIsInsideRendered(selection)) return normalizeText(text);
+  const fragment = selection.getRangeAt(0).cloneContents();
+  if (!fragment.querySelector?.('.katex-mathml')) return normalizeText(text);
+  return normalizeText(normalizeKatexFragmentToTex(fragment).textContent || text);
+}
 
 function normalizeText(value) {
   return String(value || '').replace(NORMALIZE_RE, ' ').trim();
@@ -328,7 +428,7 @@ function selectionToMarkerDraft(selection, markdown, currentSourcePath) {
     return { error: 'Open a Markdown file before creating a marker.' };
   }
 
-  const selectedText = normalizeText(selection.toString());
+  const selectedText = selectionPlainText(selection);
   if (!selectedText) {
     return { error: 'The current rendered selection is empty.' };
   }
@@ -495,10 +595,18 @@ function writePaneRatio(sourcePath, value) {
   }));
 }
 
+function getCodeMirrorEditor() {
+  const root = document.querySelector('.editor-pane .CodeMirror');
+  return root?.CodeMirror || null;
+}
+
 function App() {
   const [markdown, setMarkdown] = useState('');
   const [sourcePath, setSourcePath] = useState('');
   const [filePathInput, setFilePathInput] = useState('');
+  const [gotoLineInput, setGotoLineInput] = useState('');
+  const [cursorLine, setCursorLine] = useState(1);
+  const [lineCount, setLineCount] = useState(1);
   const [markerRegistry, setMarkerRegistry] = useState(() => readMarkerRegistry());
   const [autoReload, setAutoReload] = useState(true);
   const [hotReloadAvailable, setHotReloadAvailable] = useState(false);
@@ -566,6 +674,40 @@ function App() {
   async function openPathFromInput(event) {
     event.preventDefault();
     await loadMarkdown(filePathInput);
+  }
+
+  function syncEditorLineStats() {
+    const editor = getCodeMirrorEditor();
+    if (!editor) return { cursorLine: 1, lineCount: 1 };
+    const nextCursorLine = (editor.getCursor()?.line ?? 0) + 1;
+    const nextLineCount = Math.max(1, editor.lineCount?.() ?? 1);
+    setCursorLine(nextCursorLine);
+    setLineCount(nextLineCount);
+    return { cursorLine: nextCursorLine, lineCount: nextLineCount };
+  }
+
+  function gotoLine(rawLine, { focus = true } = {}) {
+    const editor = getCodeMirrorEditor();
+    if (!editor) {
+      const error = 'Editor is not ready yet.';
+      setStatus(error);
+      return { ok: false, error };
+    }
+    const maxLine = Math.max(1, editor.lineCount?.() ?? 1);
+    const line = Math.min(maxLine, Math.max(1, Number.parseInt(String(rawLine || ''), 10) || 1));
+    editor.setCursor({ line: line - 1, ch: 0 });
+    editor.scrollIntoView({ line: Math.max(0, line - 1), ch: 0 }, 120);
+    if (focus) editor.focus();
+    setGotoLineInput(String(line));
+    setCursorLine(line);
+    setLineCount(maxLine);
+    setStatus(`jumped to line ${line}`);
+    return { ok: true, line, lineCount: maxLine };
+  }
+
+  function handleGotoLineSubmit(event) {
+    event.preventDefault();
+    gotoLine(gotoLineInput);
   }
 
   function commitMarkerRegistry(nextRegistry) {
@@ -840,8 +982,39 @@ function App() {
   }, [markdown]);
 
   useEffect(() => {
+    let cancelled = false;
+    let detach = () => {};
+
+    function attach() {
+      const editor = getCodeMirrorEditor();
+      if (!editor) return false;
+      const update = () => syncEditorLineStats();
+      update();
+      editor.on('cursorActivity', update);
+      editor.on('changes', update);
+      detach = () => {
+        editor.off('cursorActivity', update);
+        editor.off('changes', update);
+      };
+      return true;
+    }
+
+    if (attach()) return () => detach();
+    const id = window.setInterval(() => {
+      if (cancelled || attach()) {
+        window.clearInterval(id);
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+      detach();
+    };
+  }, [sourcePath]);
+
+  useEffect(() => {
     const id = window.setTimeout(() => {
-      // Rendering and Mermaid/KaTeX work can settle after React commits, so
+      // Rendering and KaTeX/Mermaid work can settle after React commits, so
       // annotate shortly after the Viewer updates instead of during render.
       annotateRenderedDom(markdown, sourcePath);
       const rendered = renderMarkerHighlights(markerRegistryRef.current, sourcePath);
@@ -851,6 +1024,12 @@ function App() {
         writeMarkerRegistry(rendered.nextMarkers);
       }
       applyPaneLayout(paneRatioRef.current);
+      void (async () => {
+        await renderMermaidInRenderedDom((error) => {
+          setRenderErrors((prev) => [...prev, `Mermaid render error: ${String(error?.message || error)}`]);
+        });
+        await renderMathInRenderedDom();
+      })();
     }, 120);
     return () => window.clearTimeout(id);
   }, [markdown, sourcePath, markerRegistry]);
@@ -882,6 +1061,7 @@ function App() {
         const rendered = document.querySelector('#rendered');
         const allMarkers = normalizeMarkerRegistry(markerRegistryRef.current);
         const currentDocMarkers = markersForSourcePath(allMarkers, sourcePathRef.current);
+        const editor = getCodeMirrorEditor();
         return {
           sourcePath,
           sourceFileName,
@@ -902,12 +1082,23 @@ function App() {
           tableCount: rendered?.querySelectorAll('table').length || 0,
           imageCount: rendered?.querySelectorAll('img').length || 0,
           mathCount: rendered?.querySelectorAll('.katex, .katex-display').length || 0,
-          mermaidCount: rendered?.querySelectorAll('.mermaid, svg[id^="mermaid"]').length || 0,
+          mermaidCount: rendered?.querySelectorAll('.bytemd-mermaid, .mermaid, svg[id*="mermaid"]').length || 0,
           markerCount: currentDocMarkers.length,
           allMarkerCount: allMarkers.length,
           staleMarkerCount: allMarkers.filter((marker) => marker.status === 'stale').length,
           paneRatio: currentPaneLayoutRatio(),
+          cursorLine: editor ? (editor.getCursor()?.line ?? 0) + 1 : cursorLine,
+          lineCount: editor ? Math.max(1, editor.lineCount?.() ?? 1) : lineCount,
           renderErrors,
+        };
+      },
+      selectionDetails() {
+        const selection = window.getSelection?.();
+        return {
+          rawText: normalizeText(selection?.toString() || ''),
+          plainText: selectionPlainText(selection),
+          inRenderedViewer: selectionIsInsideRendered(selection),
+          containsMath: Boolean(selection?.rangeCount && selection.getRangeAt(0).cloneContents()?.querySelector?.('.katex-mathml')),
         };
       },
       headings() {
@@ -997,9 +1188,12 @@ function App() {
       getMarkdown() {
         return markdown;
       },
+      gotoLine(line, options = {}) {
+        return gotoLine(line, options);
+      },
       reloadMarkdown: loadMarkdown,
     };
-  }, [allowExt, autoReload, hotReloadAvailable, lastHotReloadAt, markdown, paneRatio, readOnly, renderErrors, rootPath, sourcePath, status, syncScroll, markerRegistry, currentMarkers]);
+  }, [allowExt, autoReload, cursorLine, hotReloadAvailable, lastHotReloadAt, lineCount, markdown, paneRatio, readOnly, renderErrors, rootPath, sourcePath, status, syncScroll, markerRegistry, currentMarkers]);
 
   return (
     <div className="app-shell">
@@ -1022,6 +1216,22 @@ function App() {
           <button type="submit">Open</button>
         </form>
         <div className="actions">
+          <form className="line-jump" onSubmit={handleGotoLineSubmit}>
+            <label htmlFor="markdown-goto-line">Line</label>
+            <input
+              id="markdown-goto-line"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              value={gotoLineInput}
+              onChange={(event) => setGotoLineInput(event.target.value)}
+              placeholder={String(cursorLine)}
+              title={`Jump to a source line (1-${lineCount})`}
+            />
+            <button type="submit">Go</button>
+            <span className="line-jump-meta">
+              {cursorLine}/{lineCount}
+            </span>
+          </form>
           <span className="status">{status}</span>
           {readOnly ? <span className="status read-only-badge">read-only</span> : null}
           <label className="auto-reload">
@@ -1105,6 +1315,10 @@ function App() {
             onChange={setMarkdown}
             mode="tab"
             placeholder="Edit Markdown source here"
+            editorConfig={{
+              lineNumbers: true,
+              lineWrapping: true,
+            }}
           />
         </section>
         <div
@@ -1134,4 +1348,10 @@ function App() {
   );
 }
 
-createRoot(document.getElementById('root')).render(<App />);
+const container = document.getElementById('root');
+if (!container) {
+  throw new Error('Markdown Preview Bridge root container not found');
+}
+const root = container.__mdPreviewBridgeRoot || createRoot(container);
+container.__mdPreviewBridgeRoot = root;
+root.render(<App />);
