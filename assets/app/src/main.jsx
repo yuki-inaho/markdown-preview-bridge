@@ -18,6 +18,7 @@ const DEFAULT_PANE_RATIO = 0.4;
 const PANE_KEYBOARD_STEP = 0.04;
 const MIN_PANE_WIDTH = 360;
 const SPLIT_HANDLE_WIDTH = 12;
+const ASSET_API_PATH = '/api/asset';
 let katexModulePromise = null;
 let mermaidModulePromise = null;
 let mermaidInitialized = false;
@@ -190,6 +191,102 @@ function nearestMdBlock(node) {
 
 function basename(filePath) {
   return String(filePath || '').split(/[\\/]/).filter(Boolean).pop() || 'Markdown Preview Bridge';
+}
+
+function dirname(filePath) {
+  const value = String(filePath || '');
+  const index = Math.max(value.lastIndexOf('/'), value.lastIndexOf('\\'));
+  return index >= 0 ? value.slice(0, index) : '';
+}
+
+function isExternalAssetUrl(value) {
+  const src = String(value || '').trim();
+  return (
+    !src
+    || src.startsWith('#')
+    || src.startsWith('//')
+    || /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(src)
+  );
+}
+
+function splitAssetReference(value) {
+  const src = String(value || '');
+  const hashIndex = src.indexOf('#');
+  const queryIndex = src.indexOf('?');
+  const splitAt = [hashIndex, queryIndex].filter((index) => index >= 0).sort((a, b) => a - b)[0];
+  return splitAt === undefined
+    ? { pathPart: src, suffix: '' }
+    : { pathPart: src.slice(0, splitAt), suffix: src.slice(splitAt) };
+}
+
+function decodeAssetPath(pathPart) {
+  try {
+    return decodeURI(pathPart);
+  } catch {
+    return pathPart;
+  }
+}
+
+function normalizeAbsolutePath(parts, absolute) {
+  const stack = absolute ? [''] : [];
+  parts.forEach((part) => {
+    if (!part || part === '.') return;
+    if (part === '..') {
+      if (stack.length > (absolute ? 1 : 0)) stack.pop();
+      return;
+    }
+    stack.push(part);
+  });
+  const joined = stack.join('/');
+  return joined || (absolute ? '/' : '.');
+}
+
+function resolveAssetPath(assetRef, sourceFilePath) {
+  if (!assetRef || !sourceFilePath) return '';
+  const { pathPart } = splitAssetReference(assetRef);
+  const decodedPath = decodeAssetPath(pathPart);
+  if (decodedPath.startsWith('/')) {
+    return normalizeAbsolutePath(decodedPath.split('/'), true);
+  }
+  const base = dirname(sourceFilePath).replace(/\\/g, '/');
+  return normalizeAbsolutePath(`${base}/${decodedPath}`.split('/'), base.startsWith('/'));
+}
+
+function assetApiUrl(assetPath) {
+  return `${ASSET_API_PATH}?path=${encodeURIComponent(assetPath)}`;
+}
+
+function rewriteRenderedAssetUrls(sourceFilePath) {
+  const rendered = document.querySelector('#rendered');
+  if (!rendered || !sourceFilePath) return [];
+  return Array.from(rendered.querySelectorAll('img[src]')).map((image) => {
+    const original = image.dataset.mdPreviewOriginalSrc || image.getAttribute('src') || '';
+    if (!image.dataset.mdPreviewOriginalSrc) {
+      image.dataset.mdPreviewOriginalSrc = original;
+    }
+    if (isExternalAssetUrl(original)) {
+      return {
+        original,
+        resolvedPath: null,
+        rewrittenSrc: image.getAttribute('src') || '',
+        skipped: true,
+        loaded: image.complete && image.naturalWidth > 0,
+      };
+    }
+    const resolvedPath = resolveAssetPath(original, sourceFilePath);
+    const rewrittenSrc = assetApiUrl(resolvedPath);
+    if (image.getAttribute('src') !== rewrittenSrc) {
+      image.setAttribute('src', rewrittenSrc);
+    }
+    image.dataset.mdPreviewAssetPath = resolvedPath;
+    return {
+      original,
+      resolvedPath,
+      rewrittenSrc,
+      skipped: false,
+      loaded: image.complete && image.naturalWidth > 0,
+    };
+  });
 }
 
 function pathFromLocation() {
@@ -1017,6 +1114,7 @@ function App() {
       // Rendering and KaTeX/Mermaid work can settle after React commits, so
       // annotate shortly after the Viewer updates instead of during render.
       annotateRenderedDom(markdown, sourcePath);
+      rewriteRenderedAssetUrls(sourcePath);
       const rendered = renderMarkerHighlights(markerRegistryRef.current, sourcePath);
       if (!markerRegistryEquals(rendered.nextMarkers, markerRegistryRef.current)) {
         markerRegistryRef.current = rendered.nextMarkers;
@@ -1081,6 +1179,12 @@ function App() {
           codeBlockCount: rendered?.querySelectorAll('pre, code').length || 0,
           tableCount: rendered?.querySelectorAll('table').length || 0,
           imageCount: rendered?.querySelectorAll('img').length || 0,
+          imageLoadedCount: rendered
+            ? Array.from(rendered.querySelectorAll('img')).filter((image) => image.complete && image.naturalWidth > 0).length
+            : 0,
+          imageBrokenCount: rendered
+            ? Array.from(rendered.querySelectorAll('img')).filter((image) => image.complete && image.naturalWidth === 0).length
+            : 0,
           mathCount: rendered?.querySelectorAll('.katex, .katex-display').length || 0,
           mermaidCount: rendered?.querySelectorAll('.bytemd-mermaid, .mermaid, svg[id*="mermaid"]').length || 0,
           markerCount: currentDocMarkers.length,
@@ -1111,6 +1215,20 @@ function App() {
             sourceLine: element.dataset.mdLine || null,
             block: element.dataset.mdBlock || null,
           }));
+      },
+      images() {
+        return Array.from(document.querySelectorAll('#rendered img')).map((image, index) => ({
+          index,
+          originalSrc: image.dataset.mdPreviewOriginalSrc || image.getAttribute('src') || '',
+          src: image.getAttribute('src') || '',
+          assetPath: image.dataset.mdPreviewAssetPath || null,
+          complete: image.complete,
+          naturalWidth: image.naturalWidth,
+          naturalHeight: image.naturalHeight,
+          clientWidth: image.clientWidth,
+          clientHeight: image.clientHeight,
+          alt: image.getAttribute('alt') || '',
+        }));
       },
       findText(query) {
         const needle = normalizeText(query).toLowerCase();

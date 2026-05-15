@@ -19,12 +19,18 @@ DEFAULT_PREVIEW = REPO_ROOT / "scripts" / "preview.py"
 BASE_BRIDGE_KEYS = {
     "diagnostics",
     "headings",
+    "images",
     "findText",
     "getSelectionContext",
     "selectionDetails",
     "getMarkdown",
     "reloadMarkdown",
 }
+PNG_1X1 = bytes.fromhex(
+    "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+    "1f15c4890000000a49444154789c6360000002000100ffff030000060005"
+    "57bfab6a0000000049454e44ae426082"
+)
 
 
 def find_free_port() -> int:
@@ -122,6 +128,8 @@ def make_sample_markdown() -> str:
             "",
             "This line is intentionally long so the editor must wrap it visually while still treating it as one Markdown source line for logical line navigation checks in the regression test.",
             "",
+            "![Pixel](assets/pixel.png)",
+            "",
             "## Math",
             "",
             "Inline math: $a^2 + b^2 = c^2$",
@@ -163,6 +171,8 @@ def verify_bridge_contract(
     diagnostics_before = result.get("diagnosticsBefore") or {}
     diagnostics_after = result.get("diagnosticsAfter") or diagnostics_before
     counts = result.get("counts") or {}
+    images = result.get("images") or []
+    image_fetches = result.get("imageFetches") or []
     layout = result.get("layout") or {}
 
     expect(BASE_BRIDGE_KEYS.issubset(bridge_keys), f"Missing bridge keys: {sorted(BASE_BRIDGE_KEYS - bridge_keys)}")
@@ -171,6 +181,19 @@ def verify_bridge_contract(
     expect(counts.get("headingCount", 0) >= 3, "expected rendered headings to be counted")
     expect(counts.get("tableCount", 0) >= 1, "expected rendered table to be counted")
     expect(counts.get("codeBlockCount", 0) >= 1, "expected rendered code block to be counted")
+    expect(counts.get("imageCount", 0) >= 1, "expected rendered image to be counted")
+    expect(counts.get("imageLoadedCount", 0) >= 1, "expected relative image to load through /api/asset")
+    expect(counts.get("imageBrokenCount", 0) == 0, f"expected no broken images, got {counts.get('imageBrokenCount')}")
+    expect(images and images[0].get("naturalWidth", 0) > 0, f"expected image natural size to be available: {images}")
+    expect(images and str(images[0].get("src") or "").startswith("/api/asset?path="), f"expected image src to use /api/asset: {images}")
+    expect(
+        image_fetches and image_fetches[0].get("status") == 200,
+        f"expected image fetch to return HTTP 200: {image_fetches}",
+    )
+    expect(
+        image_fetches and image_fetches[0].get("contentType") == "image/png",
+        f"expected image fetch to return image/png: {image_fetches}",
+    )
     expect(layout.get("noOverlap") is True, f"marker strip overlaps main content: {layout}")
 
     if require_line_navigation:
@@ -226,6 +249,9 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="md-preview-bridge-regression-") as temp_dir:
         root = Path(temp_dir)
+        asset = root / "assets" / "pixel.png"
+        asset.parent.mkdir()
+        asset.write_bytes(PNG_1X1)
         source = root / "sample.md"
         source.write_text(make_sample_markdown(), encoding="utf-8")
         expected_line_count = len(source.read_text(encoding="utf-8").splitlines())
@@ -259,8 +285,25 @@ def main() -> int:
             output = run_playwright(
                 session,
                 "eval",
-                f"""() => {{
+                f"""async () => {{
   const bridge = window.__mdPreviewBridge;
+  const waitForImages = () => new Promise((resolve) => {{
+    const deadline = Date.now() + 5000;
+    const check = () => {{
+      const images = Array.from(document.querySelectorAll('#rendered img'));
+      if (images.length > 0 && images.every((image) => image.complete && image.naturalWidth > 0)) {{
+        resolve();
+        return;
+      }}
+      if (Date.now() > deadline) {{
+        resolve();
+        return;
+      }}
+      setTimeout(check, 100);
+    }};
+    check();
+  }});
+  await waitForImages();
   const cm = document.querySelector('.editor-pane .CodeMirror')?.CodeMirror;
   const shell = document.querySelector('.app-shell');
   const marker = document.querySelector('.marker-strip');
@@ -271,6 +314,15 @@ def main() -> int:
     return {{ top: r.top, bottom: r.bottom, height: r.height }};
   }};
   const diagnosticsBefore = bridge?.diagnostics?.() || null;
+  const images = bridge?.images?.() || [];
+  const imageFetches = await Promise.all(images.map(async (image) => {{
+    const response = await fetch(image.src);
+    return {{
+      status: response.status,
+      contentType: response.headers.get('content-type'),
+      contentLength: response.headers.get('content-length')
+    }};
+  }}));
   const gotoResult = bridge?.gotoLine?.({target_line}, {{ focus: false }}) || null;
   const diagnosticsAfter = bridge?.diagnostics?.() || null;
   return {{
@@ -285,8 +337,13 @@ def main() -> int:
     counts: {{
       headingCount: diagnosticsBefore?.headingCount ?? 0,
       tableCount: diagnosticsBefore?.tableCount ?? 0,
-      codeBlockCount: diagnosticsBefore?.codeBlockCount ?? 0
+      codeBlockCount: diagnosticsBefore?.codeBlockCount ?? 0,
+      imageCount: diagnosticsBefore?.imageCount ?? 0,
+      imageLoadedCount: diagnosticsBefore?.imageLoadedCount ?? 0,
+      imageBrokenCount: diagnosticsBefore?.imageBrokenCount ?? 0
     }},
+    images,
+    imageFetches,
     katexCount: document.querySelectorAll('#rendered .katex, #rendered .katex-display').length,
     layout: {{
       gridTemplateRows: shell ? getComputedStyle(shell).gridTemplateRows : null,

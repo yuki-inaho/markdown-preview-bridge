@@ -49,6 +49,7 @@ local .md -> ByteMD/Vite browser preview -> Playwright DOM inspection -> Codex e
 - Bind the preview server to `127.0.0.1` unless there is a deliberate reason to expose it.
 - Use `--root` to restrict which Markdown files the bridge may read or write. If omitted, root defaults to the input file's parent directory.
 - Only Markdown-like extensions are allowed by default: `.md`, `.markdown`, `.mdown`, `.mkd`.
+- Local Markdown images are served through `/api/asset` only when their real path stays under `--root` and their extension is in the image asset allowlist.
 - Read-only mode is the default. Use `--allow-write` only when browser-side save is needed.
 - Do not treat this as a safe renderer for untrusted Markdown. Raw HTML, Mermaid, KaTeX, and plugin behavior should be considered trusted-local-input concerns.
 
@@ -84,6 +85,10 @@ uv run --frozen scripts/preview.py \
   --port 8777 \
   --allow-write
 ```
+
+Relative Markdown image links are resolved from the current Markdown file's
+directory and served through `/api/asset` if they stay under `--root`. Use
+`--asset-ext` to change the allowed local image extensions.
 
 Open the preview with Playwright:
 
@@ -315,6 +320,7 @@ The page exposes:
 - `diagnostics().readOnly`, `diagnostics().rootPath`, and `diagnostics().allowExt`: current file-access guardrails.
 - `selectionDetails()`: raw selection text, math-aware plain text, and whether the current selection includes rendered math.
 - `headings()`: rendered headings with approximate source lines.
+- `images()`: rendered image records, including original source, `/api/asset` URL, resolved asset path, and natural size.
 - `findText(query)`: rendered block matches and likely source lines.
 - `getSelectionContext()`: current browser selection and nearest rendered block metadata.
 - `gotoLine(line, options)`: jump the source editor to a logical Markdown line.

@@ -90,6 +90,11 @@ def main() -> int:
         default=".md,.markdown,.mdown,.mkd",
         help="Comma-separated Markdown file extensions allowed under --root",
     )
+    parser.add_argument(
+        "--asset-ext",
+        default=".png,.jpg,.jpeg,.gif,.webp,.svg,.bmp,.avif",
+        help="Comma-separated image asset extensions that may be served under --root",
+    )
     args = parser.parse_args()
     read_only = True if args.read_only else not args.allow_write
 
@@ -123,11 +128,13 @@ def main() -> int:
     env["MD_PREVIEW_WATCH"] = "0" if args.no_watch else "1"
     env["MD_PREVIEW_READ_ONLY"] = "1" if read_only else "0"
     env["MD_PREVIEW_ALLOW_EXT"] = args.allow_ext
+    env["MD_PREVIEW_ASSET_EXT"] = args.asset_ext
 
     print(f"Markdown: {markdown_path}", flush=True)
     print(f"Root: {root_path}", flush=True)
     print(f"Read-only: {'yes' if read_only else 'no'}", flush=True)
     print(f"Allowed extensions: {args.allow_ext}", flush=True)
+    print(f"Asset extensions: {args.asset_ext}", flush=True)
     print(f"App: {app_dir}", flush=True)
     print(f"Open: http://{args.host}:{args.port}/", flush=True)
     subprocess.run([node, "server.mjs"], cwd=app_dir, env=env, check=True)

@@ -16,6 +16,12 @@ const allowedExtensions = new Set(
     .map((value) => value.trim().toLowerCase())
     .filter(Boolean)
 );
+const allowedAssetExtensions = new Set(
+  String(process.env.MD_PREVIEW_ASSET_EXT || '.png,.jpg,.jpeg,.gif,.webp,.svg,.bmp,.avif')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean)
+);
 // One server may browse several files under the same root, but the lightweight
 // hot-reload path tracks only the currently active Markdown file.
 let activeWatchFile = null;
@@ -70,6 +76,51 @@ async function requestedFile(req) {
     throw error;
   }
   return realTarget;
+}
+
+async function requestedAsset(req) {
+  // Local images are served through the same root/realpath boundary as Markdown
+  // files, but with an image-only extension allowlist.
+  const url = new URL(req.url || '/', 'http://markdown-preview.local');
+  const rawPath = url.searchParams.get('path');
+  if (!rawPath) {
+    const error = new Error('Asset path is required.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const target = path.resolve(rawPath);
+  const [realRoot, realTarget] = await Promise.all([realPreviewRoot(), fs.realpath(target)]);
+  if (!isInsideRoot(realRoot, realTarget)) {
+    const error = new Error(`Asset path is outside preview root: ${realTarget}`);
+    error.statusCode = 403;
+    throw error;
+  }
+  const ext = path.extname(realTarget).toLowerCase();
+  if (!allowedAssetExtensions.has(ext)) {
+    const error = new Error(`Asset extension is not allowed: ${ext || '(none)'}`);
+    error.statusCode = 403;
+    throw error;
+  }
+  const stat = await fs.stat(realTarget);
+  if (!stat.isFile()) {
+    const error = new Error(`Asset path is not a file: ${realTarget}`);
+    error.statusCode = 400;
+    throw error;
+  }
+  return { path: realTarget, stat, ext };
+}
+
+function assetContentType(ext) {
+  return {
+    '.avif': 'image/avif',
+    '.bmp': 'image/bmp',
+    '.gif': 'image/gif',
+    '.jpeg': 'image/jpeg',
+    '.jpg': 'image/jpeg',
+    '.png': 'image/png',
+    '.svg': 'image/svg+xml; charset=utf-8',
+    '.webp': 'image/webp',
+  }[ext] || 'application/octet-stream';
 }
 
 function ensureWatched(server, sourceFile) {
@@ -129,6 +180,29 @@ function markdownPreviewApiPlugin() {
         }
       });
 
+      server.middlewares.use('/api/asset', async (req, res) => {
+        try {
+          if (req.method !== 'GET' && req.method !== 'HEAD') {
+            res.statusCode = 405;
+            res.end('GET or HEAD required');
+            return;
+          }
+          const asset = await requestedAsset(req);
+          res.statusCode = 200;
+          res.setHeader('content-type', assetContentType(asset.ext));
+          res.setHeader('content-length', String(asset.stat.size));
+          res.setHeader('cache-control', 'no-store');
+          res.setHeader('x-asset-path', encodeURIComponent(asset.path));
+          if (req.method === 'HEAD') {
+            res.end();
+            return;
+          }
+          fsSync.createReadStream(asset.path).pipe(res);
+        } catch (error) {
+          sendError(res, error);
+        }
+      });
+
       server.middlewares.use('/api/save', async (req, res) => {
         // Saving is deliberately opt-in because this bridge is often used for
         // review sessions where the Markdown file should remain the only source
@@ -181,6 +255,7 @@ console.log(`Markdown root: ${previewRoot}`);
 console.log(`Markdown hot reload: ${watchEnabled ? 'enabled' : 'disabled'}`);
 console.log(`Markdown read-only: ${readOnly ? 'enabled' : 'disabled'}`);
 console.log(`Markdown allowed extensions: ${Array.from(allowedExtensions).join(',')}`);
+console.log(`Markdown asset extensions: ${Array.from(allowedAssetExtensions).join(',')}`);
 
 process.once('SIGINT', () => {
   closeActiveWatcher();

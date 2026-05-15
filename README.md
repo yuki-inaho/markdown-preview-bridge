@@ -83,6 +83,12 @@ uv run --frozen scripts/preview.py \
   --allow-write
 ```
 
+Relative Markdown images are resolved from the Markdown file's directory and
+served through `/api/asset` when the target image stays under `--root`.
+The default image allowlist is `.png,.jpg,.jpeg,.gif,.webp,.svg,.bmp,.avif`;
+override it with `--asset-ext` when a review document needs a different local
+image format.
+
 The preview also supports browser-local review markers and a draggable split
 between the source editor and rendered preview. Markers are stored in the
 browser origin's `localStorage`, so they survive reloads and are visible across
@@ -107,6 +113,8 @@ The smoke test verifies:
 
 - a Markdown file under `--root` can be read;
 - root-outside paths are rejected;
+- root-contained image assets can be read through `/api/asset`;
+- root-outside assets and non-image assets are rejected;
 - default/read-only save is rejected;
 - watch headers are returned as expected.
 
@@ -119,7 +127,9 @@ uv run --frozen scripts/bridge_regression.py
 
 This headless regression test starts the preview server, opens it through
 `playwright-cli`, and verifies the browser bridge contract plus the split-layout
-guardrail that keeps the marker strip from overlapping the main panes.
+guardrail that keeps the marker strip from overlapping the main panes. It also
+checks that a Markdown-relative image loads through `/api/asset` instead of
+falling back to Vite's HTML response.
 
 When comparing a merge target against another checkout or installed skill,
 override the launcher path and enable the line-navigation contract:
@@ -145,9 +155,9 @@ This is a trusted-local development bridge, not a shared web service and not a
 sandbox for untrusted Markdown.
 
 The server is bound to `127.0.0.1` by default. It restricts file access to the
-configured `--root`, checks real paths, limits extensions to Markdown-like files,
-and starts in read-only mode. Use `--allow-write` only when browser-side saving
-is part of the workflow.
+configured `--root`, checks real paths, limits Markdown and image asset
+extensions separately, and starts in read-only mode. Use `--allow-write` only
+when browser-side saving is part of the workflow.
 
 ## Known Limitations
 

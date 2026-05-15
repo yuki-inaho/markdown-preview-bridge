@@ -477,6 +477,22 @@ main {
   background: #fbf8f2;
 }
 
+.markdown-body img {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: none;
+  margin: 16px auto 24px;
+  border: 1px solid rgba(36, 33, 28, 0.12);
+  background: #fff;
+}
+
+.markdown-body p > img:only-child {
+  margin-top: 18px;
+  margin-bottom: 26px;
+}
+
 .markdown-body pre {
   position: relative;
   margin: 18px 0 24px;
