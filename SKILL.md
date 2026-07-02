@@ -2,14 +2,6 @@
 name: markdown-preview-bridge
 description: "Preview and inspect local Markdown files through a fast ByteMD + Vite browser bridge controlled by Playwright. Use when the user wants an Overleaf-like workflow for Markdown: load a local .md file, render Mermaid/math/tables/code in Chrome, ask the user for visual feedback, inspect rendered DOM, map rendered blocks back to likely Markdown source lines, or iteratively edit Markdown with Codex/Claude assistance."
 license: MIT
-compatibility:
-  agents:
-    - codex
-  runtimes:
-    python: ">=3.10"
-    node: ">=20 <23"
-  platforms:
-    - linux
 metadata:
   version: "0.1.0"
 ---

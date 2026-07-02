@@ -129,6 +129,8 @@ def main() -> int:
     env["MD_PREVIEW_READ_ONLY"] = "1" if read_only else "0"
     env["MD_PREVIEW_ALLOW_EXT"] = args.allow_ext
     env["MD_PREVIEW_ASSET_EXT"] = args.asset_ext
+    # Polling avoids Vite/Chokidar EMFILE failures in containerized or low-inotify environments.
+    env.setdefault("CHOKIDAR_USEPOLLING", "1")
 
     print(f"Markdown: {markdown_path}", flush=True)
     print(f"Root: {root_path}", flush=True)
